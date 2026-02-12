@@ -1,0 +1,112 @@
+2026-02-02 18:11:20,621 | INFO | app.main | App started
+2026-02-02 18:26:33,254 | INFO | app.main | App started
+2026-02-02 18:32:56,220 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-02 18:44:46,959 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-02 18:46:24,412 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-02 18:49:02,548 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-04 17:08:58,861 | INFO | app.main | App started
+2026-02-04 17:11:33,061 | ERROR | app.api.routes | Extraction failed
+Traceback (most recent call last):
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\api\routes.py", line 43, in extract
+    extracted = extract_metrics(text)
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\services\extractor.py", line 40, in extract_metrics
+    prompt = EXTRACTION_USER_PROMPT.format(content=content)
+KeyError: '\n  "records"'
+2026-02-04 17:12:29,623 | INFO | app.main | App started
+2026-02-04 17:12:36,561 | INFO | app.main | App started
+2026-02-04 17:13:59,244 | INFO | app.main | App started
+2026-02-04 17:17:59,967 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-04 17:25:04,598 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-04 17:32:46,887 | INFO | app.main | App started
+2026-02-04 17:33:46,136 | INFO | app.main | App started
+2026-02-04 17:47:07,774 | INFO | app.main | App started
+2026-02-04 17:48:36,474 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-04 17:48:36,550 | ERROR | app.api.routes | XLSX export failed
+Traceback (most recent call last):
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\api\routes.py", line 72, in extract
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
+  File "F:\Anaconda\envs\biometric\Lib\site-packages\starlette\responses.py", line 237, in __init__
+    self.init_headers(headers)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "F:\Anaconda\envs\biometric\Lib\site-packages\starlette\responses.py", line 62, in init_headers
+    raw_headers = [(k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in headers.items()]
+                                                 ~~~~~~~~^^^^^^^^^^^
+UnicodeEncodeError: 'latin-1' codec can't encode characters in position 22-27: ordinal not in range(256)
+2026-02-04 17:51:35,163 | INFO | app.main | App started
+2026-02-04 17:51:49,994 | INFO | app.main | App started
+2026-02-04 17:54:49,837 | INFO | app.main | App started
+2026-02-04 17:55:32,234 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-05 09:46:18,225 | INFO | app.main | App started
+2026-02-05 10:03:42,245 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-06 17:54:50,651 | INFO | app.main | App started
+2026-02-06 18:19:14,641 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-06 18:23:14,590 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-07 16:54:42,376 | INFO | app.main | App started
+2026-02-07 18:05:03,025 | WARNING | app.services.llm_client | Failed to parse JSON, returning raw text
+2026-02-09 10:44:08,920 | INFO | app.main | App started
+2026-02-09 10:45:10,975 | ERROR | app.api.routes | Extraction failed
+Traceback (most recent call last):
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\api\routes.py", line 50, in extract
+    extracted = extract_metrics(text)
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\services\extractor.py", line 41, in extract_metrics
+    llm_text = call_llm(prompt)
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\services\llm_client.py", line 53, in call_llm
+    raise LLMRequestError(f"LLM error {response.status_code}: {response.text}")
+app.services.llm_client.LLMRequestError: LLM error 404: Not Found
+2026-02-09 10:56:27,187 | ERROR | app.api.routes | Extraction failed
+Traceback (most recent call last):
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\api\routes.py", line 50, in extract
+    extracted = extract_metrics(text)
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\services\extractor.py", line 41, in extract_metrics
+    llm_text = call_llm(prompt)
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\services\llm_client.py", line 53, in call_llm
+    raise LLMRequestError(f"LLM error {response.status_code}: {response.text}")
+app.services.llm_client.LLMRequestError: LLM error 404: Not Found
+2026-02-09 11:27:21,773 | INFO | app.main | App started
+2026-02-09 15:21:43,675 | INFO | app.main | App started
+2026-02-09 15:26:12,064 | ERROR | app.api.routes | Extraction failed
+Traceback (most recent call last):
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\api\routes.py", line 50, in extract
+    extracted = extract_metrics(text)
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\services\extractor.py", line 41, in extract_metrics
+    llm_text = call_llm(prompt)
+  File "C:\Users\imcas\Desktop\Biometric Information Extraction\app\services\llm_client.py", line 53, in call_llm
+    raise LLMRequestError(f"LLM error {response.status_code}: {response.text}")
+app.services.llm_client.LLMRequestError: LLM error 404: Not Found
+2026-02-09 15:30:53,727 | INFO | app.main | App started
+2026-02-09 15:57:53,685 | INFO | app.main | App started
+2026-02-09 16:06:18,539 | INFO | app.main | App started
+2026-02-09 16:24:02,161 | INFO | app.main | App started
+2026-02-10 11:38:02,893 | INFO | app.main | App started
+2026-02-10 14:32:36,206 | INFO | app.main | App started
+2026-02-10 14:57:18,638 | INFO | app.main | App started
+2026-02-10 16:20:10,910 | INFO | app.main | App started
+2026-02-10 16:20:15,864 | INFO | app.main | App started
+2026-02-10 17:26:34,335 | INFO | app.main | App started
+2026-02-11 11:11:25,301 | INFO | app.main | App started
+2026-02-11 15:41:05,671 | INFO | app.main | App started
+2026-02-11 16:37:26,140 | INFO | app.main | App started
+2026-02-11 16:37:27,721 | INFO | app.main | App started
+2026-02-11 16:40:54,926 | INFO | app.main | App started
+2026-02-11 16:41:52,506 | INFO | app.main | App started
+2026-02-11 18:29:35,648 | INFO | app.main | App started
+2026-02-11 18:50:07,811 | INFO | app.main | App started
+2026-02-11 19:05:25,123 | INFO | app.main | App started
+2026-02-11 19:23:15,452 | INFO | app.main | App started
+2026-02-12 09:29:04,646 | INFO | app.main | App started
+2026-02-12 09:34:01,215 | INFO | app.main | App started
+2026-02-12 09:41:31,744 | INFO | app.main | App started
+2026-02-12 09:41:44,586 | INFO | app.main | App started
+2026-02-12 09:42:27,257 | INFO | app.main | App started
+2026-02-12 09:42:35,203 | INFO | app.main | App started
+2026-02-12 10:43:41,774 | INFO | app.main | App started
+2026-02-12 10:43:43,128 | INFO | app.main | App started
+2026-02-12 10:45:48,018 | INFO | app.main | App started
+2026-02-12 10:54:40,882 | INFO | app.main | App started
+2026-02-12 10:54:44,951 | INFO | app.main | App started
+2026-02-12 10:54:53,117 | INFO | app.main | App started
+2026-02-12 11:29:19,552 | INFO | app.main | App started
