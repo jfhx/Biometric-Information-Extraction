@@ -106,7 +106,7 @@ curl.exe -X POST "http://127.0.0.1:8000/extract" `
 ##  备注：
 这是正常现象：你访问的是根路径 /，项目没有定义这个路由，所以返回 404。服务已经启动成功了。
 正确访问方式：
-打开文档页：  
+打开文档页： http://127.0.0.1:8000/docs 
 调用接口：POST /extract
 如果你要测试 xlsx 下载，用这条：
 curl.exe -X POST "http://127.0.0.1:8000/extract?output=xlsx" ^  -F "file=@test_files/提取信息示例.docx" ^  -F "description=示例" ^  -o result_5.xlsx

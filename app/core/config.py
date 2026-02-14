@@ -33,7 +33,7 @@ class Settings:
     # LLM_API_KEY = os.getenv("LLM_API_KEY", "4093c10a5dc6cee213a71c60d549e0c2696009aa225af33c5a83fcc589ae4c61")   #科技云密钥会有监控
     # LLM_MODEL = os.getenv("LLM_MODEL", "qwen-plus")
     # LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:235b")
-    LLM_MODEL = os.getenv("LLM_MODEL", "Deepseek-V3")
+    LLM_MODEL = os.getenv("LLM_MODEL", "DeepSeek-V3")
    
     LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))

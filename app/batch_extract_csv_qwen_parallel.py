@@ -341,12 +341,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--output-excel",
-        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\qwen_extracted_result_parallel.xlsx",
+        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\extracted_result_parallel.xlsx",
         help="Output Excel path",
     )
     parser.add_argument(
         "--output-timing-csv",
-        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\qwen_extracted_timing_parallel.csv",
+        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\extracted_timing_parallel.csv",
         help="Output timing CSV path",
     )
     parser.add_argument(
