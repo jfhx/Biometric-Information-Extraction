@@ -91,11 +91,17 @@ qwen3:235b 先用 workers=2，稳定后试 3，再看失败率和耗时是否更
 直接运行（推荐）：
 cd "C:\Users\imcas\Desktop\Biometric Information Extraction"
 python -m app.batch_extract_csv_qwen_parallel ^  
---limit 0 ^  --workers 2 ^  --progress-every 100 ^  
+--limit 0 ^  
+--workers 2 ^  
+--progress-every 100 ^  
 --progress-file "C:\Users\imcas\Desktop\Biometric Information Extraction\progress.csv"
 
 如果先做小样本压测：
-python -m app.batch_extract_csv_qwen_parallel --limit 300 --workers 3 --progress-every 100 --progress-file "C:\Users\imcas\Desktop\Biometric Information Extraction\progress_300.csv"
+python -m app.batch_extract_csv_qwen_parallel 
+--limit 10
+ --workers 2 
+--progress-every 5 
+--progress-file "C:\Users\imcas\Desktop\Biometric Information Extraction\progress_10.csv"
 
 你现在可以实时看两个地方：
 终端：会看到 progress: 已完成/总数/失败数/平均耗时/ETA

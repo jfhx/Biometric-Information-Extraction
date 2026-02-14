@@ -91,7 +91,9 @@ Output exactly one JSON object with these fields only:
 Rules:
 1) source_url must be copied from input Source URL.
 2) event_type examples: sporadic case, cluster outbreak, community transmission, imported case.
-3) host should be human / animal / human,animal.
+3) host must be in English and as specific as the source text allows.
+   Use concrete host groups when mentioned (e.g., African people, birds, bats).
+   If the source only says generic categories, use human / animal / human,animal.
 4) infection_num and death_num should be pure numbers if available.
 5) If pathogen_type is not explicitly stated, infer from context.
    If still ambiguous, choose the most likely class based on pathogen naming.

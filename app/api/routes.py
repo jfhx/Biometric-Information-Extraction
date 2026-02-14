@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
 from app.schemas import ExtractionResult
+from app.services.csv_parallel_extractor import extract_csv_parallel_to_excel
 from app.services.extractor import extract_metrics
 from app.services.file_reader import UnsupportedFileTypeError, read_file_to_text
 
@@ -101,3 +102,53 @@ async def extract(
 @router.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@router.post("/extract-csv-parallel")
+async def extract_csv_parallel(
+    file: UploadFile = File(...),
+    workers: int = 2,
+    timeout: float = 120.0,
+    max_chars: int = 12000,
+    retries: int = 1,
+    retry_wait: float = 1.5,
+    limit: int = 0,
+):
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV file is supported")
+
+    content = await file.read()
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=413, detail="File too large")
+
+    try:
+        excel_bytes, meta = extract_csv_parallel_to_excel(
+            content,
+            workers=max(1, workers),
+            timeout=max(30.0, timeout),
+            max_chars=max(1000, max_chars),
+            retries=max(0, retries),
+            retry_wait=max(0.0, retry_wait),
+            limit=max(0, limit),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Parallel CSV extraction failed")
+        raise HTTPException(status_code=500, detail="Parallel CSV extraction failed") from exc
+
+    base_name = os.path.splitext(file.filename)[0] or "who_docs_emergencies_detail"
+    filename = f"{base_name}_extracted.xlsx"
+    headers = {
+        "Content-Disposition": _content_disposition(filename),
+        "X-Rows-Total": str(meta.get("rows_total", 0)),
+        "X-Rows-Failed": str(meta.get("rows_failed", 0)),
+        "X-Workers": str(meta.get("workers", workers)),
+        "X-Model-Name": str(meta.get("model_name", settings.LLM_MODEL)),
+    }
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )

@@ -336,17 +336,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Parallel batch extraction from CSV by qwen3:235b")
     parser.add_argument(
         "--input-csv",
-        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\who_docs_emergencies_detail.csv",
+        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\out_gvn_detail.csv",
         help="Input CSV path",
     )
     parser.add_argument(
         "--output-excel",
-        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\who_docs_emergencies_detail_result.xlsx",
+        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\out_gvn_detail_result.xlsx",
         help="Output Excel path",
     )
     parser.add_argument(
         "--output-timing-csv",
-        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\who_docs_emergencies_timing_result.csv",
+        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\out_gvn_timing_result.csv",
         help="Output timing CSV path",
     )
     parser.add_argument(
