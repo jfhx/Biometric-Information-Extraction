@@ -90,6 +90,7 @@ qwen3:235b 先用 workers=2，稳定后试 3，再看失败率和耗时是否更
 --progress-file 持续写进度到本地 CSV
 直接运行（推荐）：
 cd "C:\Users\imcas\Desktop\Biometric Information Extraction"
+
 python -m app.batch_extract_csv_qwen_parallel ^  
 --limit 0 ^  
 --workers 2 ^  
@@ -103,6 +104,37 @@ python -m app.batch_extract_csv_qwen_parallel
 --progress-every 5 
 --progress-file "C:\Users\imcas\Desktop\Biometric Information Extraction\progress_10.csv"
 
+
+### 全量进行跑和运行的命令
+python -m app.batch_extract_csv_qwen_parallel 
+--limit 0
+ --workers 2 
+--progress-every 100 
+--progress-file "C:\Users\imcas\Desktop\Biometric Information Extraction\progress_who.csv"
+
+
+
 你现在可以实时看两个地方：
 终端：会看到 progress: 已完成/总数/失败数/平均耗时/ETA
 progress.csv：每次进度点都会追加一行，方便你随时打开看是否卡住。
+
+
+
+
+
+
+# 四、
+1) 先启动服务（项目根目录）
+uvicorn app.main:app --reload
+2) 用 curl.exe 调接口并保存到你指定路径
+先小规模测试（建议先 limit=20）
+curl.exe -X POST "http://127.0.0.1:8000/extract-csv-parallel?workers=2&timeout=120&max_chars=12000&retries=1&retry_wait=1.5&limit=20" `  -F "file=@C:\Users\imcas\Desktop\Biometric Information Extraction\who_docs_emergencies_detail.csv" `  --output "C:\Users\imcas\Desktop\Biometric Information Extraction\who_docs_emergencies_detail_test.xlsx"
+全量跑（limit=0）
+curl.exe -X POST "http://127.0.0.1:8000/extract-csv-parallel?workers=2&timeout=120&max_chars=12000&retries=1&retry_wait=1.5&limit=0" `  -F "file=@C:\Users\imcas\Desktop\Biometric Information Extraction\who_docs_emergencies_detail.csv" `  --output "C:\Users\imcas\Desktop\Biometric Information Extraction\who_docs_emergencies_detail_extracted.xlsx"
+3) 你问的“能否指定输出路径”
+可以，现在就是由你在命令里 --output 指定本地保存路径。
+例如改成：
+--output "D:\result\my_extract.xlsx"
+> 注意：当前接口是“返回文件流下载”，不是在服务器端自动写指定路径。
+> 如果你想传一个参数让后端直接保存到某个路径，我也可以再给你加这个功能。
+另外你前面说的对：跑之前请先关 Clash，避免连不到公司内网模型。

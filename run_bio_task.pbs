@@ -1,0 +1,36 @@
+#!/bin/bash
+# ===================== PBS Resource Configuration (Do not modify) =====================
+#PBS -N bio_info_extract       # Task name (can modify, e.g., your script name)
+#PBS -q fat                    # Use fat or normal queue (more idle nodes, priority to run)
+#PBS -l nodes=node01.chess:ppn=100         # Node 01 (node name: node01.chess), 10 CPU cores
+#PBS -l walltime=100:00:00    # Max run time 100 hours (terminate automatically if timeout)
+#PBS -o /data7/sunxiuqiang/Biometric_Information_Extraction/task_run.log        # Normal output log
+#PBS -e /data7/sunxiuqiang/Biometric_Information_Extraction/task_error.log      # Error log
+
+# ===================== Only modify [your Python script name] below =====================
+# 1. Activate py39 environment (path is your actual conda path, do not modify)
+source /data/homebackup/sunxiuqiang/tools/miniconda3/etc/profile.d/conda.sh
+conda activate py39
+
+# 2. Enter project directory (confirm it's your actual path, do not modify)
+cd /data7/sunxiuqiang/Biometric_Information_Extraction || exit  # Exit if cd fails
+
+# 3. Check if input file exists
+if [ ! -f "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_detail.csv" ]; then
+    echo "Error: Input file does not exist!"
+    exit 1
+fi
+
+# 4. Run Python script (★ CRITICAL: \ must be the LAST character of each line, NO SPACES AFTER \ ★)
+python -m app.out_batch_extract_csv_qwen_parallel \
+--limit 0 \
+--workers 95 \
+--progress-every 50 \
+--input-csv "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_detail.csv" \
+--output-excel "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_detail_result_test.xlsx" \
+--output-timing-csv "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_timing_result_test.csv" \
+--progress-file "/data7/sunxiuqiang/Biometric_Information_Extraction/progress_test.csv" \
+--dict-xlsx "/data7/sunxiuqiang/Biometric_Information_Extraction/dict_country_global_all.xlsx" \
+--dict-pathogen-xlsx "/data7/sunxiuqiang/Biometric_Information_Extraction/dict_pathogen_feature.xlsx" \
+--dict-host-xlsx "/data7/sunxiuqiang/Biometric_Information_Extraction/dict_host_tag.xlsx" \
+--unmatched-file "/data7/sunxiuqiang/Biometric_Information_Extraction/unmatched_names_test.txt"

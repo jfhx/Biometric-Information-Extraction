@@ -13,6 +13,13 @@ import requests
 from app.core.config import settings
 from app.services.llm_client import LLMRequestError, parse_llm_json
 from app.services.prompt_templates import CSV_FIELD_SYSTEM_PROMPT, CSV_FIELD_USER_PROMPT
+from app.utils.standardize import (
+    CountryProvinceStandardizer,
+    HostStandardizer,
+    PathogenStandardizer,
+    enrich_record,
+    save_all_unmatched,
+)
 
 
 TARGET_FIELDS = [
@@ -30,6 +37,36 @@ TARGET_FIELDS = [
     "start_date",
     "end_date",
     "host",
+    "infection_num",
+    "death_num",
+    "event_type",
+]
+
+OUTPUT_FIELDS = [
+    "source_url",
+    "title",
+    "pathogen_type",
+    "pathogen",
+    "pathogen_rank_1",
+    "pathogen_rank_2",
+    "subtype",
+    "original_continent",
+    "original_country",
+    "original_province",
+    "spread_continent",
+    "spread_country",
+    "spread_province",
+    "start_date",
+    "start_date_year",
+    "start_date_month",
+    "start_date_day",
+    "end_date",
+    "end_date_year",
+    "end_date_month",
+    "end_date_day",
+    "host",
+    "host_rank_1",
+    "host_rank_2",
     "infection_num",
     "death_num",
     "event_type",
@@ -164,7 +201,31 @@ def run_batch_parallel(
     retry_wait: float,
     progress_every: int,
     progress_file: Optional[Path],
+    dict_xlsx: Optional[Path] = None,
+    dict_pathogen_xlsx: Optional[Path] = None,
+    dict_host_xlsx: Optional[Path] = None,
+    unmatched_file: Optional[Path] = None,
 ) -> None:
+    standardizer: Optional[CountryProvinceStandardizer] = None
+    if dict_xlsx and dict_xlsx.exists():
+        standardizer = CountryProvinceStandardizer(dict_xlsx)
+        print(f"Loaded country/province reference: {dict_xlsx}")
+    elif dict_xlsx:
+        print(f"WARNING: dict_xlsx not found: {dict_xlsx}, skipping standardization")
+
+    pathogen_std: Optional[PathogenStandardizer] = None
+    if dict_pathogen_xlsx and dict_pathogen_xlsx.exists():
+        pathogen_std = PathogenStandardizer(dict_pathogen_xlsx)
+        print(f"Loaded pathogen reference: {dict_pathogen_xlsx}")
+    elif dict_pathogen_xlsx:
+        print(f"WARNING: dict_pathogen_xlsx not found: {dict_pathogen_xlsx}, skipping")
+
+    host_std: Optional[HostStandardizer] = None
+    if dict_host_xlsx and dict_host_xlsx.exists():
+        host_std = HostStandardizer(dict_host_xlsx)
+        print(f"Loaded host reference: {dict_host_xlsx}")
+    elif dict_host_xlsx:
+        print(f"WARNING: dict_host_xlsx not found: {dict_host_xlsx}, skipping")
     df = pd.read_csv(input_csv, encoding="utf-8")
     if limit > 0:
         df = df.head(limit)
@@ -261,7 +322,10 @@ def run_batch_parallel(
     timing_rows = [timings_map[i] for i in ordered_indices]
     failures = sum(1 for item in timing_rows if item["status"] != "ok")
 
-    result_df = pd.DataFrame(result_rows, columns=TARGET_FIELDS)
+    for rec in result_rows:
+        enrich_record(rec, standardizer, pathogen_std, host_std)
+
+    result_df = pd.DataFrame(result_rows, columns=OUTPUT_FIELDS)
     timing_df = pd.DataFrame(timing_rows)
 
     if not timing_df.empty:
@@ -320,6 +384,12 @@ def run_batch_parallel(
         with final_output_json.open("w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
+    if standardizer or pathogen_std or host_std:
+        _unmatched_path = unmatched_file or output_excel.with_name(
+            output_excel.stem + "_unmatched.txt"
+        )
+        save_all_unmatched(_unmatched_path, standardizer, pathogen_std, host_std)
+
     print(
         f"Done. rows={len(df)}, failed={failures}, workers={workers}, "
         f"total_seconds={total_seconds:.2f}"
@@ -354,7 +424,7 @@ def main() -> None:
         default=r"",
         help="Optional JSON output path (auto used when Excel engine is unavailable)",
     )
-    parser.add_argument("--timeout", type=float, default=max(120.0, settings.LLM_TIMEOUT))    #如果报 429/超时，降低并发到 1-2，并适当增大 --timeout（如 180）。
+    parser.add_argument("--timeout", type=float, default=max(600.0, settings.LLM_TIMEOUT))    #如果报 429/超时，降低并发到 1-2，并适当增大 --timeout（如 180）。
     parser.add_argument("--max-chars", type=int, default=12000, help="Max chars from full_text per row")
     parser.add_argument("--limit", type=int, default=0, help="Process first N rows only, 0 means all rows")
     parser.add_argument("--workers", type=int, default=2, help="Thread workers (recommended 2-4)")
@@ -366,10 +436,34 @@ def main() -> None:
         default=r"",
         help="Optional progress CSV path for real-time checkpoint writing",
     )
+    parser.add_argument(
+        "--dict-xlsx",
+        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\dict_country_global_all.xlsx",
+        help="Path to country/province reference xlsx for standardization",
+    )
+    parser.add_argument(
+        "--dict-pathogen-xlsx",
+        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\dict_pathogen_feature.xlsx",
+        help="Path to pathogen reference xlsx for standardization",
+    )
+    parser.add_argument(
+        "--dict-host-xlsx",
+        default=r"C:\Users\imcas\Desktop\Biometric Information Extraction\dict_host_tag.xlsx",
+        help="Path to host reference xlsx for standardization",
+    )
+    parser.add_argument(
+        "--unmatched-file",
+        default=r"",
+        help="Path to save unmatched names",
+    )
     args = parser.parse_args()
 
     progress_file_path = Path(args.progress_file) if args.progress_file.strip() else None
     output_json_path = Path(args.output_json) if args.output_json.strip() else None
+    dict_xlsx_path = Path(args.dict_xlsx) if args.dict_xlsx.strip() else None
+    dict_pathogen_path = Path(args.dict_pathogen_xlsx) if args.dict_pathogen_xlsx.strip() else None
+    dict_host_path = Path(args.dict_host_xlsx) if args.dict_host_xlsx.strip() else None
+    unmatched_file_path = Path(args.unmatched_file) if args.unmatched_file.strip() else None
 
     run_batch_parallel(
         input_csv=Path(args.input_csv),
@@ -384,6 +478,10 @@ def main() -> None:
         retry_wait=max(0.0, args.retry_wait),
         progress_every=max(1, args.progress_every),
         progress_file=progress_file_path,
+        dict_xlsx=dict_xlsx_path,
+        dict_pathogen_xlsx=dict_pathogen_path,
+        dict_host_xlsx=dict_host_path,
+        unmatched_file=unmatched_file_path,
     )
 
 

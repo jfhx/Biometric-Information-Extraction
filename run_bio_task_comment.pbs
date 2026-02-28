@@ -1,0 +1,65 @@
+# #!/bin/bash
+# # ===================== PBS 资源配置（不用改，适配你的集群） =====================
+# #PBS -N bio_info_extract       # 任务名（可改，比如改成你的脚本名）
+# #PBS -q fat                    # 用fat或者normal队列（空闲节点多，优先跑）
+# #PBS -l nodes=node01.chess:ppn=10         # 第01个节点（节点名字：node01.chess），10核CPU（足够跑数据，可改ppn=16/32）
+# #PBS -l walltime=100:00:00    # 最长运行100小时（超时自动终止，可改）
+# #PBS -o ./task_run.log        # 正常输出日志（存在项目目录，方便看）或者是日志的绝对路径 #PBS -o /data7/sunxiuqiang/Biometric_Information_Extraction/task_run.log
+# #PBS -e ./task_error.log      # 错误日志（报错时看这个）                              #PBS -e /data7/sunxiuqiang/Biometric_Information_Extraction/task_error.log
+
+# # ===================== 以下只需要改【你的Python脚本名】 =====================
+# # 1. 激活你的py39环境（路径是你的conda实际路径，不用改）
+# source /data/homebackup/sunxiuqiang/tools/miniconda3/etc/profile.d/conda.sh
+# conda activate py39
+
+# # 2. 进入你的项目目录（不用改，确认是你的实际路径即可）
+# cd /data7/sunxiuqiang/Biometric_Information_Extraction || exit  # 加|| exit：如果cd失败，直接终止脚本，避免后续报错
+
+# # 3. 运行你的Python脚本（★只改这里！把test.py换成你的实际脚本名 # ★ 关键修改：每行末尾加\续行 ★） 
+# # python test.py
+
+# # 全量进行跑和运行的命令
+# python -m app.out_batch_extract_csv_qwen_parallel \  # 加\表示命令未结束
+# --limit 0 \
+# --workers 8 \
+# --progress-every 100 \
+# --input-csv "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_detail.csv" \
+# --output-excel "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_detail_result_test.xlsx" \
+# --output-timing-csv "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_timing_result_test.csv" \
+# --progress-file "/data7/sunxiuqiang/Biometric_Information_Extraction/progress_test.csv"
+
+
+
+
+#!/bin/bash
+# ===================== PBS Resource Configuration (Do not modify) =====================
+#PBS -N bio_info_extract       # Task name (can modify, e.g., your script name)
+#PBS -q fat                    # Use fat or normal queue (more idle nodes, priority to run)
+#PBS -l nodes=node01.chess:ppn=100         # Node 01 (node name: node01.chess), 10 CPU cores (can modify to ppn=16/32)
+#PBS -l walltime=100:00:00    # Max run time 100 hours (terminate automatically if timeout, can modify)
+#PBS -o /data7/sunxiuqiang/Biometric_Information_Extraction/task_run.log        # Normal output log
+#PBS -e /data7/sunxiuqiang/Biometric_Information_Extraction/task_error.log      # Error log
+
+# ===================== Only modify [your Python script name] below =====================
+# 1. Activate py39 environment (path is your actual conda path, do not modify)
+source /data/homebackup/sunxiuqiang/tools/miniconda3/etc/profile.d/conda.sh
+conda activate py39
+
+# 2. Enter project directory (confirm it's your actual path, do not modify)
+cd /data7/sunxiuqiang/Biometric_Information_Extraction || exit  # Exit if cd fails
+
+# 3. Check if input file exists
+if [ ! -f "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_detail.csv" ]; then
+    echo "Error: Input file does not exist!"
+    exit 1
+fi
+
+# 4. Run Python script (★ Add \ at the end of each line for line continuation ★)
+python -m app.out_batch_extract_csv_qwen_parallel \
+--limit 0 \
+--workers 95 \  # Adjust to 8 (match 10 CPU cores, leave 2 cores for system)
+--progress-every 100 \
+--input-csv "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_detail.csv" \
+--output-excel "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_detail_result_test.xlsx" \
+--output-timing-csv "/data7/sunxiuqiang/Biometric_Information_Extraction/out_gvn_timing_result_test.csv" \
+--progress-file "/data7/sunxiuqiang/Biometric_Information_Extraction/progress_test.csv"
