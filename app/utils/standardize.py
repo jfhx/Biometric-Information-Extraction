@@ -7,6 +7,9 @@ Utilities for post-processing LLM extraction results:
 5. Track unmatched names.
 """
 
+from __future__ import annotations
+
+from difflib import SequenceMatcher
 import re
 import threading
 from pathlib import Path
@@ -158,6 +161,12 @@ class CountryProvinceStandardizer:
         with self._lock:
             return sorted(self._unmatched_provinces)
 
+    def clear_unmatched(self) -> None:
+        """Reset unmatched tracking state."""
+        with self._lock:
+            self._unmatched_countries.clear()
+            self._unmatched_provinces.clear()
+
     def save_unmatched(self, output_path: str | Path) -> None:
         """Save unmatched country/province names to a text file."""
         path = Path(output_path)
@@ -190,6 +199,72 @@ def _normalize_key(s: str) -> str:
     return re.sub(r"[-_\s]+", "_", s.strip().lower())
 
 
+def _clean_cell_value(value: Any) -> str:
+    """Safely convert excel cell values to cleaned text."""
+    if value is None:
+        return ""
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if text.lower() == "nan":
+        return ""
+    return text
+
+
+def _simplify_pathogen_text(s: str) -> str:
+    """Simplify pathogen text for typo-tolerant fuzzy matching."""
+    lowered = s.strip().lower()
+    lowered = re.sub(r"[-_]+", " ", lowered)
+    lowered = re.sub(r"[\(\)\[\]\{\},.;:/\\]+", " ", lowered)
+    lowered = re.sub(
+        r"\b(virus|viruses|infection|infections|disease|strain|variant|clade)\b",
+        " ",
+        lowered,
+    )
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    return re.sub(r"[^a-z0-9]+", "", lowered)
+
+
+def _best_fuzzy_match(
+    query: str,
+    candidates: Dict[str, Tuple[str, str, str]],
+    min_score: float,
+) -> Optional[Tuple[str, str, str]]:
+    if not query:
+        return None
+    best_match: Optional[Tuple[str, str, str]] = None
+    best_score = 0.0
+    for candidate_key, triple in candidates.items():
+        if not candidate_key:
+            continue
+        score = SequenceMatcher(None, query, candidate_key).ratio()
+        if score > best_score:
+            best_match = triple
+            best_score = score
+    if best_match and best_score >= min_score:
+        return best_match
+    return None
+
+
+def _split_aliases(alias_text: str) -> List[str]:
+    """Split alias text by semicolons and deduplicate aliases."""
+    if not alias_text:
+        return []
+    raw_parts = re.split(r"[;；]+", alias_text)
+    result: List[str] = []
+    seen: Set[str] = set()
+    for part in raw_parts:
+        alias = part.strip()
+        if not alias:
+            continue
+        norm = _normalize_key(alias)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        result.append(alias)
+    return result
+
+
 class PathogenStandardizer:
     """Match LLM-extracted pathogen against dict_pathogen_feature.xlsx.
 
@@ -197,34 +272,96 @@ class PathogenStandardizer:
     Also matches via pathogen_name (human-readable name).
     """
 
+    _MANUAL_ALIASES: Dict[str, str] = {
+        # Common aliases/variants found in reports.
+        "mpox": "monkeypox virus",
+        "monkeypox": "monkeypox virus",
+        "monkey pox": "monkeypox virus",
+        "chikunguya": "chikungunya virus",
+        "chikunguya virus": "chikungunya virus",
+    }
+
     def __init__(self, xlsx_path: str | Path):
         self._lock = threading.Lock()
-        self._unmatched: Set[str] = set()
+        self._unmatched_counter: Dict[str, int] = {}
 
         df = pd.read_excel(xlsx_path)
+        df.columns = [str(c).strip() for c in df.columns]
         # pathogen_lookup: {normalized_key: (pathogen, rank1, rank2)}
         self._pathogen_lookup: Dict[str, Tuple[str, str, str]] = {}
         # Also index by pathogen_name for human-readable matching
         self._name_lookup: Dict[str, Tuple[str, str, str]] = {}
+        # Simplified lookups for typo-tolerant fuzzy matching
+        self._simple_code_lookup: Dict[str, Tuple[str, str, str]] = {}
+        self._simple_name_lookup: Dict[str, Tuple[str, str, str]] = {}
+        # Aliases mapped to standard triples
+        self._alias_lookup: Dict[str, Tuple[str, str, str]] = {}
         # rank2 -> (pathogen kept empty, rank1, rank2)
         self._rank2_lookup: Dict[str, Tuple[str, str]] = {}
         # rank1 -> rank1
         self._rank1_set: Dict[str, str] = {}
 
+        def _register_alias(alias: str, triple: Tuple[str, str, str]) -> None:
+            norm_alias = _normalize_key(alias)
+            if norm_alias:
+                self._alias_lookup.setdefault(norm_alias, triple)
+            simple_alias = _simplify_pathogen_text(alias)
+            if simple_alias:
+                self._alias_lookup.setdefault(simple_alias, triple)
+
         for _, row in df.iterrows():
-            pathogen = str(row.get("pathogen", "")).strip()
-            rank1 = str(row.get("pathogen_rank_1", "")).strip()
-            rank2 = str(row.get("pathogen_rank_2", "")).strip()
-            pname = str(row.get("pathogen_name", "")).strip()
+            pathogen = _clean_cell_value(row.get("pathogen", ""))
+            rank1 = _clean_cell_value(row.get("pathogen_rank_1", ""))
+            rank2 = _clean_cell_value(row.get("pathogen_rank_2", ""))
+            record_triple = (pathogen, rank1, rank2)
+            pname = (
+                _clean_cell_value(row.get("pathogen_name", ""))
+                or _clean_cell_value(row.get("pathogen name", ""))
+                or _clean_cell_value(row.get("pathogen_full_name", ""))
+            )
+            palias = (
+                _clean_cell_value(row.get("pathogen_alias", ""))
+                or _clean_cell_value(row.get("pathogen_aliases", ""))
+                or _clean_cell_value(row.get("aliases", ""))
+                or _clean_cell_value(row.get("alias", ""))
+            )
 
             if pathogen:
-                self._pathogen_lookup[_normalize_key(pathogen)] = (pathogen, rank1, rank2)
+                self._pathogen_lookup[_normalize_key(pathogen)] = record_triple
+                simple_code = _simplify_pathogen_text(pathogen)
+                if simple_code:
+                    self._simple_code_lookup.setdefault(
+                        simple_code,
+                        record_triple,
+                    )
             if pname:
-                self._name_lookup[_normalize_key(pname)] = (pathogen, rank1, rank2)
+                self._name_lookup[_normalize_key(pname)] = record_triple
+                simple_name = _simplify_pathogen_text(pname)
+                if simple_name:
+                    self._simple_name_lookup.setdefault(
+                        simple_name,
+                        record_triple,
+                    )
+            for alias in _split_aliases(palias):
+                _register_alias(alias, record_triple)
             if rank2:
                 self._rank2_lookup.setdefault(_normalize_key(rank2), (rank1, rank2))
             if rank1:
                 self._rank1_set.setdefault(_normalize_key(rank1), rank1)
+
+        # Build manual aliases only when canonical target exists in this dictionary.
+        for alias, canonical in self._MANUAL_ALIASES.items():
+            canonical_key = _normalize_key(canonical)
+            canonical_simple = _simplify_pathogen_text(canonical)
+            triple = self._name_lookup.get(canonical_key)
+            if not triple:
+                triple = self._pathogen_lookup.get(canonical_key)
+            if not triple and canonical_simple:
+                triple = self._simple_name_lookup.get(canonical_simple)
+            if not triple and canonical_simple:
+                triple = self._simple_code_lookup.get(canonical_simple)
+            if triple:
+                _register_alias(alias, triple)
 
     def standardize(self, raw_pathogen: str) -> Tuple[str, str, str]:
         """Return (pathogen, pathogen_rank_1, pathogen_rank_2)."""
@@ -232,6 +369,7 @@ class PathogenStandardizer:
             return ("", "", "")
         cleaned = raw_pathogen.strip()
         key = _normalize_key(cleaned)
+        simple_key = _simplify_pathogen_text(cleaned)
 
         # 1) Exact match on pathogen code (normalized)
         if key in self._pathogen_lookup:
@@ -241,7 +379,13 @@ class PathogenStandardizer:
         if key in self._name_lookup:
             return self._name_lookup[key]
 
-        # 3) Substring match on pathogen_name (e.g. "H5N1" in "Influenza A H5N1")
+        # 3) Common alias mapping (e.g. mpox -> Monkeypox virus / MPXV)
+        if key in self._alias_lookup:
+            return self._alias_lookup[key]
+        if simple_key and simple_key in self._alias_lookup:
+            return self._alias_lookup[simple_key]
+
+        # 4) Substring match on pathogen_name (e.g. "H5N1" in "Influenza A H5N1")
         best_name_match: Optional[Tuple[str, str, str]] = None
         best_name_len = 0
         for nm_key, triple in self._name_lookup.items():
@@ -252,7 +396,7 @@ class PathogenStandardizer:
         if best_name_match:
             return best_name_match
 
-        # 4) Substring match on pathogen code
+        # 5) Substring match on pathogen code
         best_code_match: Optional[Tuple[str, str, str]] = None
         best_code_len = 0
         for code_key, triple in self._pathogen_lookup.items():
@@ -263,23 +407,73 @@ class PathogenStandardizer:
         if best_code_match:
             return best_code_match
 
-        # 5) Try matching as rank2
+        # 6) Typo-tolerant fuzzy match on pathogen_name/pathogen.
+        if simple_key:
+            # Strong threshold for names; catches minor typos like chikunguya/chikungunya.
+            fuzzy_name_match = _best_fuzzy_match(simple_key, self._simple_name_lookup, min_score=0.88)
+            if fuzzy_name_match:
+                return fuzzy_name_match
+
+            # Slightly lower threshold for short pathogen codes.
+            code_cutoff = 0.8 if len(simple_key) <= 6 else 0.88
+            fuzzy_code_match = _best_fuzzy_match(simple_key, self._simple_code_lookup, min_score=code_cutoff)
+            if fuzzy_code_match:
+                return fuzzy_code_match
+
+        # 7) Try matching as rank2
         if key in self._rank2_lookup:
             r1, r2 = self._rank2_lookup[key]
             return ("", r1, r2)
 
-        # 6) Try matching as rank1
+        # 8) Try matching as rank1
         if key in self._rank1_set:
             return ("", self._rank1_set[key], "")
 
         # Not found
         with self._lock:
-            self._unmatched.add(cleaned)
+            self._unmatched_counter[cleaned] = (
+                self._unmatched_counter.get(cleaned, 0) + 1
+            )
         return (cleaned, "", "")
 
     def get_unmatched(self) -> List[str]:
         with self._lock:
-            return sorted(self._unmatched)
+            return sorted(self._unmatched_counter.keys())
+
+    def get_unmatched_with_counts(self) -> List[Tuple[str, int]]:
+        """Return unmatched pathogen names with frequencies."""
+        with self._lock:
+            return sorted(
+                self._unmatched_counter.items(),
+                key=lambda kv: (-kv[1], kv[0].lower()),
+            )
+
+    def clear_unmatched(self) -> None:
+        """Reset unmatched tracking state."""
+        with self._lock:
+            self._unmatched_counter.clear()
+
+    def is_known_pathogen(self, raw_pathogen: str) -> bool:
+        """Return whether raw value can match dictionary indexes."""
+        if not raw_pathogen or not raw_pathogen.strip():
+            return False
+        cleaned = raw_pathogen.strip()
+        key = _normalize_key(cleaned)
+        simple_key = _simplify_pathogen_text(cleaned)
+
+        if (
+            key in self._pathogen_lookup
+            or key in self._name_lookup
+            or key in self._alias_lookup
+        ):
+            return True
+        if simple_key and (
+            simple_key in self._simple_code_lookup
+            or simple_key in self._simple_name_lookup
+            or simple_key in self._alias_lookup
+        ):
+            return True
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +562,11 @@ class HostStandardizer:
         with self._lock:
             return sorted(self._unmatched)
 
+    def clear_unmatched(self) -> None:
+        """Reset unmatched tracking state."""
+        with self._lock:
+            self._unmatched.clear()
+
 
 # ---------------------------------------------------------------------------
 # Save all unmatched names
@@ -392,9 +591,18 @@ def save_all_unmatched(
         if up:
             sections.append(("Unmatched Province Names (country|province)", up))
     if pathogen_std:
-        upath = pathogen_std.get_unmatched()
-        if upath:
-            sections.append(("Unmatched Pathogen Names (not in dict_pathogen_feature)", upath))
+        upath_with_counts = pathogen_std.get_unmatched_with_counts()
+        if upath_with_counts:
+            upath = [f"{name}\t{count}" for name, count in upath_with_counts]
+            sections.append(
+                (
+                    (
+                        "Unmatched Pathogen Names "
+                        "(not in dict_pathogen_feature, name\\tcount)"
+                    ),
+                    upath,
+                )
+            )
     if host_std:
         uhost = host_std.get_unmatched()
         if uhost:

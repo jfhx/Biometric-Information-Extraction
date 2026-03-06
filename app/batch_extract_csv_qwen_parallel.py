@@ -1,11 +1,12 @@
-import argparse
+import argparse  # 标准库：命令行参数解析
 import csv
 import json
 import math
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import requests
@@ -41,6 +42,22 @@ TARGET_FIELDS = [
     "death_num",
     "event_type",
 ]
+
+BACKFILL_LOG_FIELDS = [
+    "category",
+    "raw_input",
+    "resolved_value",
+    "status",
+    "usage_count",
+    "applied_count",
+    "error",
+    "llm_output",
+]
+
+BACKFILL_SYSTEM_PROMPT = (
+    "You normalize noisy epidemiology entities into canonical values. "
+    "Always return strict JSON only."
+)
 
 OUTPUT_FIELDS = [
     "source_url",
@@ -87,11 +104,14 @@ def _truncate_text(text: str, max_chars: int) -> str:
     return text[:max_chars]
 
 
-def _build_payload(prompt: str) -> Dict[str, Any]:
+def _build_payload(
+    prompt: str,
+    system_prompt: str = CSV_FIELD_SYSTEM_PROMPT,
+) -> Dict[str, Any]:
     return {
         "model": settings.LLM_MODEL,
         "messages": [
-            {"role": "system", "content": CSV_FIELD_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.1,
@@ -107,16 +127,27 @@ def _resolve_chat_completions_url(base_url: str) -> str:
     return f"{normalized}/chat/completions"
 
 
-def _call_qwen(prompt: str, timeout: float) -> str:
+def _call_qwen(
+    prompt: str,
+    timeout: float,
+    system_prompt: str = CSV_FIELD_SYSTEM_PROMPT,
+) -> str:
     url = _resolve_chat_completions_url(settings.LLM_BASE_URL)
     headers: Dict[str, str] = {}
     if settings.LLM_API_KEY:
         headers["Authorization"] = f"Bearer {settings.LLM_API_KEY}"
-    payload = _build_payload(prompt)
-    response = requests.post(url=url, headers=headers, json=payload, timeout=timeout)
+    payload = _build_payload(prompt, system_prompt=system_prompt)
+    response = requests.post(
+        url=url,
+        headers=headers,
+        json=payload,
+        timeout=timeout,
+    )
 
     if response.status_code >= 400:
-        raise LLMRequestError(f"LLM error {response.status_code}: {response.text}")
+        raise LLMRequestError(
+            f"LLM error {response.status_code}: {response.text}"
+        )
 
     data = response.json()
     try:
@@ -133,6 +164,394 @@ def _normalize_record(raw: Dict[str, Any], source_url: str) -> Dict[str, str]:
             continue
         record[field] = _safe_str(raw.get(field, ""))
     return record
+
+
+def _strip_code_fences(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z0-9_-]*\\n?", "", cleaned)
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    return cleaned.strip()
+
+
+def _parse_json_object(text: str) -> Dict[str, Any]:
+    parsed = json.loads(_strip_code_fences(text))
+    if not isinstance(parsed, dict):
+        raise ValueError("Expected JSON object from LLM")
+    return parsed
+
+
+def _call_llm_json(
+    prompt: str,
+    timeout: float,
+    retries: int,
+) -> Tuple[Dict[str, Any], str, str]:
+    last_error = ""
+    last_output = ""
+    for attempt in range(1, retries + 2):
+        try:
+            llm_text = _call_qwen(
+                prompt,
+                timeout=timeout,
+                system_prompt=BACKFILL_SYSTEM_PROMPT,
+            )
+            last_output = llm_text
+            return _parse_json_object(llm_text), llm_text, ""
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt <= retries:
+                time.sleep(0.5 * attempt)
+                continue
+    return {}, last_output, last_error
+
+
+def _build_geo_backfill_prompt(country: str, province: str) -> str:
+    payload = {
+        "country": country,
+        "province_or_city": province,
+    }
+    return (
+        "Normalize location names to: country + first-level province/state. "
+        "If input is a city (e.g., Wuhan), map it to its province (Hubei). "
+        "If uncertain, return empty string.\\n"
+        f"Input: {json.dumps(payload, ensure_ascii=False)}\\n"
+        "Return JSON with keys: country, province, reason."
+    )
+
+
+def _build_pathogen_backfill_prompt(raw_pathogen: str) -> str:
+    payload = {"pathogen": raw_pathogen}
+    return (
+        "Normalize pathogen mention into a canonical pathogen "
+        "name/alias for dictionary "
+        "matching. Keep answer short. If uncertain, return empty string.\\n"
+        f"Input: {json.dumps(payload, ensure_ascii=False)}\\n"
+        "Return JSON with keys: canonical_pathogen, reason."
+    )
+
+
+def _build_host_backfill_prompt(raw_host: str) -> str:
+    payload = {"host": raw_host}
+    return (
+        "Classify host text into host_rank_1 and host_rank_2. "
+        "children/infants/neonates/indigenous groups should usually map to Human. "
+        "If uncertain, leave fields empty.\\n"
+        f"Input: {json.dumps(payload, ensure_ascii=False)}\\n"
+        "Return JSON with keys: normalized_host, host_rank_1, host_rank_2, reason."
+    )
+
+
+def _clear_unmatched_trackers(
+    standardizer: Optional[CountryProvinceStandardizer],
+    pathogen_std: Optional[PathogenStandardizer],
+    host_std: Optional[HostStandardizer],
+) -> None:
+    if standardizer:
+        standardizer.clear_unmatched()
+    if pathogen_std:
+        pathogen_std.clear_unmatched()
+    if host_std:
+        host_std.clear_unmatched()
+
+
+def _rebuild_unmatched_tracking(
+    records: List[Dict[str, str]],
+    standardizer: Optional[CountryProvinceStandardizer],
+    pathogen_std: Optional[PathogenStandardizer],
+    host_std: Optional[HostStandardizer],
+) -> None:
+    _clear_unmatched_trackers(standardizer, pathogen_std, host_std)
+
+    for rec in records:
+        if standardizer:
+            for prefix in ("original", "spread"):
+                country_field = f"{prefix}_country"
+                province_field = f"{prefix}_province"
+                std_country = standardizer.standardize_country(
+                    rec.get(country_field, "")
+                )
+                standardizer.standardize_province(
+                    rec.get(province_field, ""),
+                    std_country,
+                )
+        if pathogen_std:
+            pathogen_std.standardize(rec.get("pathogen", ""))
+        if host_std:
+            host_std.standardize(rec.get("host", ""))
+
+
+def _run_llm_backfill_on_unmatched(
+    records: List[Dict[str, str]],
+    standardizer: Optional[CountryProvinceStandardizer],
+    pathogen_std: Optional[PathogenStandardizer],
+    host_std: Optional[HostStandardizer],
+    timeout: float,
+    retries: int,
+) -> List[Dict[str, Any]]:
+    if not records:
+        return []
+
+    unmatched_countries: Set[str] = set()
+    unmatched_provinces: Set[str] = set()
+    unmatched_pathogens: Set[str] = set()
+    unmatched_hosts: Set[str] = set()
+
+    if standardizer:
+        unmatched_countries = set(standardizer.get_unmatched_countries())
+        unmatched_provinces = set(standardizer.get_unmatched_provinces())
+    if pathogen_std:
+        unmatched_pathogens = set(pathogen_std.get_unmatched())
+    if host_std:
+        unmatched_hosts = set(host_std.get_unmatched())
+
+    geo_cache: Dict[str, Dict[str, Any]] = {}
+    pathogen_cache: Dict[str, Dict[str, Any]] = {}
+    host_cache: Dict[str, Dict[str, Any]] = {}
+
+    for rec in records:
+        if standardizer:
+            for prefix in ("original", "spread"):
+                country_field = f"{prefix}_country"
+                province_field = f"{prefix}_province"
+                raw_country = _safe_str(rec.get(country_field, ""))
+                raw_province = _safe_str(rec.get(province_field, ""))
+                pair_key = f"{raw_country}|{raw_province}"
+
+                needs_geo = False
+                if raw_country and raw_country in unmatched_countries:
+                    needs_geo = True
+                if pair_key in unmatched_provinces:
+                    needs_geo = True
+                if not needs_geo:
+                    continue
+
+                cache_item = geo_cache.get(pair_key)
+                if cache_item is None:
+                    prompt = _build_geo_backfill_prompt(
+                        raw_country,
+                        raw_province,
+                    )
+                    data, llm_text, error = _call_llm_json(
+                        prompt,
+                        timeout=timeout,
+                        retries=retries,
+                    )
+                    cache_item = {
+                        "country": _safe_str(data.get("country", "")),
+                        "province": _safe_str(data.get("province", "")),
+                        "llm_output": llm_text,
+                        "error": error,
+                        "usage_count": 0,
+                        "applied_count": 0,
+                    }
+                    geo_cache[pair_key] = cache_item
+
+                cache_item["usage_count"] += 1
+                changed = False
+
+                llm_country = _safe_str(cache_item.get("country", ""))
+                llm_province = _safe_str(cache_item.get("province", ""))
+
+                if llm_country:
+                    std_country = standardizer.standardize_country(llm_country)
+                    if std_country and std_country != raw_country:
+                        rec[country_field] = std_country
+                        changed = True
+
+                if llm_province:
+                    country_ctx = _safe_str(rec.get(country_field, ""))
+                    std_province = standardizer.standardize_province(
+                        llm_province,
+                        country_ctx,
+                    )
+                    if std_province and std_province != raw_province:
+                        rec[province_field] = std_province
+                        changed = True
+
+                if changed:
+                    cache_item["applied_count"] += 1
+
+        raw_pathogen = _safe_str(rec.get("pathogen", ""))
+        if (
+            pathogen_std
+            and raw_pathogen
+            and raw_pathogen in unmatched_pathogens
+        ):
+            cache_item = pathogen_cache.get(raw_pathogen)
+            if cache_item is None:
+                prompt = _build_pathogen_backfill_prompt(raw_pathogen)
+                data, llm_text, error = _call_llm_json(
+                    prompt,
+                    timeout=timeout,
+                    retries=retries,
+                )
+                cache_item = {
+                    "canonical_pathogen": _safe_str(
+                        data.get("canonical_pathogen", "")
+                    ),
+                    "llm_output": llm_text,
+                    "error": error,
+                    "usage_count": 0,
+                    "applied_count": 0,
+                }
+                pathogen_cache[raw_pathogen] = cache_item
+
+            cache_item["usage_count"] += 1
+            candidate = _safe_str(cache_item.get("canonical_pathogen", ""))
+            if not candidate:
+                continue
+
+            std_p, std_r1, std_r2 = pathogen_std.standardize(candidate)
+            if (
+                pathogen_std.is_known_pathogen(candidate)
+                or pathogen_std.is_known_pathogen(std_p)
+            ):
+                changed = False
+                if std_p and std_p != rec.get("pathogen", ""):
+                    rec["pathogen"] = std_p
+                    changed = True
+                if std_r1 and std_r1 != rec.get("pathogen_rank_1", ""):
+                    rec["pathogen_rank_1"] = std_r1
+                    changed = True
+                if std_r2 and std_r2 != rec.get("pathogen_rank_2", ""):
+                    rec["pathogen_rank_2"] = std_r2
+                    changed = True
+                if changed:
+                    cache_item["applied_count"] += 1
+
+        raw_host = _safe_str(rec.get("host", ""))
+        if host_std and raw_host and raw_host in unmatched_hosts:
+            cache_item = host_cache.get(raw_host)
+            if cache_item is None:
+                prompt = _build_host_backfill_prompt(raw_host)
+                data, llm_text, error = _call_llm_json(
+                    prompt,
+                    timeout=timeout,
+                    retries=retries,
+                )
+                cache_item = {
+                    "normalized_host": _safe_str(
+                        data.get("normalized_host", "")
+                    ),
+                    "host_rank_1": _safe_str(data.get("host_rank_1", "")),
+                    "host_rank_2": _safe_str(data.get("host_rank_2", "")),
+                    "llm_output": llm_text,
+                    "error": error,
+                    "usage_count": 0,
+                    "applied_count": 0,
+                }
+                host_cache[raw_host] = cache_item
+
+            cache_item["usage_count"] += 1
+            changed = False
+
+            normalized_host = _safe_str(cache_item.get("normalized_host", ""))
+            llm_rank_1 = _safe_str(cache_item.get("host_rank_1", ""))
+            llm_rank_2 = _safe_str(cache_item.get("host_rank_2", ""))
+
+            std_rank_1 = ""
+            std_rank_2 = ""
+            if normalized_host:
+                std_rank_1, std_rank_2 = host_std.standardize(normalized_host)
+
+            if std_rank_1 or std_rank_2:
+                if std_rank_1 and std_rank_1 != rec.get("host_rank_1", ""):
+                    rec["host_rank_1"] = std_rank_1
+                    changed = True
+                final_rank_2 = std_rank_2 or std_rank_1
+                if final_rank_2 and final_rank_2 != rec.get("host_rank_2", ""):
+                    rec["host_rank_2"] = final_rank_2
+                    changed = True
+            else:
+                if llm_rank_1 and llm_rank_1 != rec.get("host_rank_1", ""):
+                    rec["host_rank_1"] = llm_rank_1
+                    changed = True
+                fallback_rank_2 = llm_rank_2 or llm_rank_1
+                if (
+                    fallback_rank_2
+                    and fallback_rank_2 != rec.get("host_rank_2", "")
+                ):
+                    rec["host_rank_2"] = fallback_rank_2
+                    changed = True
+
+            if changed:
+                cache_item["applied_count"] += 1
+
+    logs: List[Dict[str, Any]] = []
+    for raw_input, cache_item in sorted(geo_cache.items()):
+        status = "error" if cache_item.get("error") else "ok"
+        if cache_item.get("applied_count", 0) > 0:
+            status = "applied"
+        logs.append(
+            {
+                "category": "country_province",
+                "raw_input": raw_input,
+                "resolved_value": json.dumps(
+                    {
+                        "country": _safe_str(cache_item.get("country", "")),
+                        "province": _safe_str(cache_item.get("province", "")),
+                    },
+                    ensure_ascii=False,
+                ),
+                "status": status,
+                "usage_count": int(cache_item.get("usage_count", 0)),
+                "applied_count": int(cache_item.get("applied_count", 0)),
+                "error": _safe_str(cache_item.get("error", "")),
+                "llm_output": _safe_str(cache_item.get("llm_output", "")),
+            }
+        )
+
+    for raw_input, cache_item in sorted(pathogen_cache.items()):
+        status = "error" if cache_item.get("error") else "ok"
+        if cache_item.get("applied_count", 0) > 0:
+            status = "applied"
+        logs.append(
+            {
+                "category": "pathogen",
+                "raw_input": raw_input,
+                "resolved_value": _safe_str(
+                    cache_item.get("canonical_pathogen", "")
+                ),
+                "status": status,
+                "usage_count": int(cache_item.get("usage_count", 0)),
+                "applied_count": int(cache_item.get("applied_count", 0)),
+                "error": _safe_str(cache_item.get("error", "")),
+                "llm_output": _safe_str(cache_item.get("llm_output", "")),
+            }
+        )
+
+    for raw_input, cache_item in sorted(host_cache.items()):
+        status = "error" if cache_item.get("error") else "ok"
+        if cache_item.get("applied_count", 0) > 0:
+            status = "applied"
+        logs.append(
+            {
+                "category": "host",
+                "raw_input": raw_input,
+                "resolved_value": json.dumps(
+                    {
+                        "normalized_host": _safe_str(
+                            cache_item.get("normalized_host", "")
+                        ),
+                        "host_rank_1": _safe_str(
+                            cache_item.get("host_rank_1", "")
+                        ),
+                        "host_rank_2": _safe_str(
+                            cache_item.get("host_rank_2", "")
+                        ),
+                    },
+                    ensure_ascii=False,
+                ),
+                "status": status,
+                "usage_count": int(cache_item.get("usage_count", 0)),
+                "applied_count": int(cache_item.get("applied_count", 0)),
+                "error": _safe_str(cache_item.get("error", "")),
+                "llm_output": _safe_str(cache_item.get("llm_output", "")),
+            }
+        )
+
+    return logs
 
 
 def _extract_one_with_retry(
@@ -158,7 +577,7 @@ def _extract_one_with_retry(
             elapsed = time.perf_counter() - start
             record = _normalize_record(data, source_url)
             timing = {
-                "row_index": int(row_index),
+                "row_index": row_index,
                 "source_url": source_url,
                 "process_seconds": round(elapsed, 4),
                 "status": "ok",
@@ -177,7 +596,7 @@ def _extract_one_with_retry(
     empty_row = {field: "" for field in TARGET_FIELDS}
     empty_row["source_url"] = source_url
     timing = {
-        "row_index": int(row_index),
+        "row_index": row_index,
         "source_url": source_url,
         "process_seconds": round(elapsed, 4),
         "status": "failed",
@@ -205,6 +624,10 @@ def run_batch_parallel(
     dict_pathogen_xlsx: Optional[Path] = None,
     dict_host_xlsx: Optional[Path] = None,
     unmatched_file: Optional[Path] = None,
+    enable_llm_backfill: bool = False,
+    llm_backfill_timeout: float = 0.0,
+    llm_backfill_retries: int = 1,
+    llm_backfill_log_file: Optional[Path] = None,
 ) -> None:
     standardizer: Optional[CountryProvinceStandardizer] = None
     if dict_xlsx and dict_xlsx.exists():
@@ -234,8 +657,14 @@ def run_batch_parallel(
         raise ValueError("CSV must include columns: detail_url, full_text")
 
     rows: List[Tuple[int, str, str]] = []
-    for idx, row in df.iterrows():
-        rows.append((int(idx), _safe_str(row.get("detail_url", "")), _safe_str(row.get("full_text", ""))))
+    for row_index, (_, row) in enumerate(df.iterrows()):
+        rows.append(
+            (
+                row_index,
+                _safe_str(row.get("detail_url", "")),
+                _safe_str(row.get("full_text", "")),
+            )
+        )
 
     total_start = time.perf_counter()
     results_map: Dict[int, Dict[str, str]] = {}
@@ -248,8 +677,8 @@ def run_batch_parallel(
     if progress_file:
         progress_file.parent.mkdir(parents=True, exist_ok=True)
         with progress_file.open("w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f)
-            writer.writerow(
+            progress_writer = csv.writer(f)
+            progress_writer.writerow(
                 [
                     "timestamp",
                     "completed",
@@ -301,8 +730,8 @@ def run_batch_parallel(
                 )
                 if progress_file:
                     with progress_file.open("a", newline="", encoding="utf-8-sig") as f:
-                        writer = csv.writer(f)
-                        writer.writerow(
+                        progress_writer = csv.writer(f)
+                        progress_writer.writerow(
                             [
                                 now_text,
                                 completed_count,
@@ -324,6 +753,32 @@ def run_batch_parallel(
 
     for rec in result_rows:
         enrich_record(rec, standardizer, pathogen_std, host_std)
+
+    llm_backfill_logs: List[Dict[str, Any]] = []
+    if enable_llm_backfill and (standardizer or pathogen_std or host_std):
+        print("Running optional stage-2 LLM backfill on unmatched values...")
+        effective_backfill_timeout = (
+            llm_backfill_timeout if llm_backfill_timeout > 0 else timeout
+        )
+        llm_backfill_logs = _run_llm_backfill_on_unmatched(
+            result_rows,
+            standardizer=standardizer,
+            pathogen_std=pathogen_std,
+            host_std=host_std,
+            timeout=effective_backfill_timeout,
+            retries=max(0, llm_backfill_retries),
+        )
+        _rebuild_unmatched_tracking(
+            result_rows,
+            standardizer=standardizer,
+            pathogen_std=pathogen_std,
+            host_std=host_std,
+        )
+
+    backfill_df = pd.DataFrame(llm_backfill_logs, columns=BACKFILL_LOG_FIELDS)
+    backfill_applied = 0
+    if not backfill_df.empty:
+        backfill_applied = len(backfill_df[backfill_df["applied_count"] > 0])
 
     result_df = pd.DataFrame(result_rows, columns=OUTPUT_FIELDS)
     timing_df = pd.DataFrame(timing_rows)
@@ -349,9 +804,16 @@ def run_batch_parallel(
                 "p50_seconds": round(p50, 4),
                 "p90_seconds": round(p90, 4),
                 "p95_seconds": round(p95, 4),
-                "throughput_rows_per_min": round((len(df) / total_seconds) * 60, 2) if total_seconds else 0.0,
+                "throughput_rows_per_min": (
+                    round((len(df) / total_seconds) * 60, 2)
+                    if total_seconds
+                    else 0.0
+                ),
                 "recommended_workers": "2-4 for qwen3:235b (start from 2)",
                 "recommended_chars_per_text": max_chars,
+                "llm_backfill_enabled": int(enable_llm_backfill),
+                "llm_backfill_unique_queries": len(backfill_df),
+                "llm_backfill_applied_queries": backfill_applied,
             }
         ]
     )
@@ -362,10 +824,28 @@ def run_batch_parallel(
     excel_error = ""
     for engine in ("xlsxwriter", "openpyxl"):
         try:
-            with pd.ExcelWriter(output_excel, engine=engine) as writer:
-                result_df.to_excel(writer, index=False, sheet_name="extracted")
-                timing_df.to_excel(writer, index=False, sheet_name="timing")
-                summary_df.to_excel(writer, index=False, sheet_name="summary")
+            with pd.ExcelWriter(output_excel, engine=engine) as excel_writer:
+                result_df.to_excel(
+                    excel_writer,
+                    index=False,
+                    sheet_name="extracted",
+                )
+                timing_df.to_excel(
+                    excel_writer,
+                    index=False,
+                    sheet_name="timing",
+                )
+                summary_df.to_excel(
+                    excel_writer,
+                    index=False,
+                    sheet_name="summary",
+                )
+                if enable_llm_backfill:
+                    backfill_df.to_excel(
+                        excel_writer,
+                        index=False,
+                        sheet_name="llm_backfill",
+                    )
             excel_written = True
             break
         except Exception as exc:
@@ -380,15 +860,33 @@ def run_batch_parallel(
             "extracted": result_df.to_dict(orient="records"),
             "timing": timing_df.to_dict(orient="records"),
             "summary": summary_df.to_dict(orient="records"),
+            "llm_backfill": backfill_df.to_dict(orient="records"),
         }
         with final_output_json.open("w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    if enable_llm_backfill:
+        _backfill_log_path = llm_backfill_log_file or output_excel.with_name(
+            output_excel.stem + "_llm_backfill.csv"
+        )
+        _backfill_log_path.parent.mkdir(parents=True, exist_ok=True)
+        backfill_df.to_csv(
+            _backfill_log_path,
+            index=False,
+            encoding="utf-8-sig",
+        )
+        print(f"LLM backfill log csv: {_backfill_log_path}")
 
     if standardizer or pathogen_std or host_std:
         _unmatched_path = unmatched_file or output_excel.with_name(
             output_excel.stem + "_unmatched.txt"
         )
-        save_all_unmatched(_unmatched_path, standardizer, pathogen_std, host_std)
+        save_all_unmatched(
+            _unmatched_path,
+            standardizer,
+            pathogen_std,
+            host_std,
+        )
 
     print(
         f"Done. rows={len(df)}, failed={failures}, workers={workers}, "
@@ -456,6 +954,31 @@ def main() -> None:
         default=r"",
         help="Path to save unmatched names",
     )
+    parser.add_argument(
+        "--enable-llm-backfill",
+        action="store_true",
+        help=(
+            "Run stage-2 LLM backfill only for values "
+            "unmatched by dictionaries"
+        ),
+    )
+    parser.add_argument(
+        "--llm-backfill-timeout",
+        type=float,
+        default=max(120.0, settings.LLM_TIMEOUT),
+        help="Timeout (seconds) for each LLM backfill request",
+    )
+    parser.add_argument(
+        "--llm-backfill-retries",
+        type=int,
+        default=1,
+        help="Retry times for each LLM backfill request",
+    )
+    parser.add_argument(
+        "--llm-backfill-log-file",
+        default=r"",
+        help="Optional path to save stage-2 LLM backfill log CSV",
+    )
     args = parser.parse_args()
 
     progress_file_path = Path(args.progress_file) if args.progress_file.strip() else None
@@ -464,6 +987,11 @@ def main() -> None:
     dict_pathogen_path = Path(args.dict_pathogen_xlsx) if args.dict_pathogen_xlsx.strip() else None
     dict_host_path = Path(args.dict_host_xlsx) if args.dict_host_xlsx.strip() else None
     unmatched_file_path = Path(args.unmatched_file) if args.unmatched_file.strip() else None
+    llm_backfill_log_path = (
+        Path(args.llm_backfill_log_file)
+        if args.llm_backfill_log_file.strip()
+        else None
+    )
 
     run_batch_parallel(
         input_csv=Path(args.input_csv),
@@ -482,6 +1010,10 @@ def main() -> None:
         dict_pathogen_xlsx=dict_pathogen_path,
         dict_host_xlsx=dict_host_path,
         unmatched_file=unmatched_file_path,
+        enable_llm_backfill=bool(args.enable_llm_backfill),
+        llm_backfill_timeout=max(1.0, float(args.llm_backfill_timeout)),
+        llm_backfill_retries=max(0, int(args.llm_backfill_retries)),
+        llm_backfill_log_file=llm_backfill_log_path,
     )
 
 
