@@ -23,19 +23,28 @@ if [ ! -f "/data7/sunxiuqiang/Biometric_Information_Extraction/don_text_extracte
 fi
 
 # 4. Run Python script (★ CRITICAL: \ must be the LAST character of each line, NO SPACES AFTER \ ★)
+# NOTE:
+# - progress_don.csv only tracks stage-1 extraction progress.
+# - stage-2 unmatched backfill progress is written to task_run.log
+#   (prints every 50 unique unmatched queries).
+
 python -m app.batch_extract_csv_qwen_parallel \
 --limit 0 \
 --workers 195 \
 --progress-every 100 \
 --input-csv "/data7/sunxiuqiang/Biometric_Information_Extraction/don_text_extracted.csv" \
---output-excel "/data7/sunxiuqiang/Biometric_Information_Extraction/don_extracted_result_parallel.xlsx" \
---output-timing-csv "/data7/sunxiuqiang/Biometric_Information_Extraction/don_extracted_timing_parallel.csv" \
+--output-excel "/data7/sunxiuqiang/Biometric_Information_Extraction/don_text_extracted_result_parallel.xlsx" \
+--output-timing-csv "/data7/sunxiuqiang/Biometric_Information_Extraction/don_text_extracted_timing_parallel.csv" \
 --progress-file "/data7/sunxiuqiang/Biometric_Information_Extraction/progress_don.csv" \
 --dict-xlsx "/data7/sunxiuqiang/Biometric_Information_Extraction/dict_country_global_all.xlsx" \
 --dict-pathogen-xlsx "/data7/sunxiuqiang/Biometric_Information_Extraction/dict_pathogen_feature.xlsx" \
 --dict-host-xlsx "/data7/sunxiuqiang/Biometric_Information_Extraction/dict_host_tag.xlsx" \
---unmatched-file "/data7/sunxiuqiang/Biometric_Information_Extraction/unmatched_names_don.txt" \
+--unmatched-file "/data7/sunxiuqiang/Biometric_Information_Extraction/unmatched_names_don.csv" \
 --enable-llm-backfill \
---llm-backfill-timeout 180 \
+--llm-backfill-timeout 120 \
 --llm-backfill-retries 1 \
 --llm-backfill-log-file "/data7/sunxiuqiang/Biometric_Information_Extraction/don_llm_backfill_log.csv"
+
+# Monitoring (run manually in another shell):
+# tail -f /data7/sunxiuqiang/Biometric_Information_Extraction/task_run.log
+# grep -nE "Stage-2 backfill|stage-2 backfill progress|Done.|Output excel" /data7/sunxiuqiang/Biometric_Information_Extraction/task_run.log

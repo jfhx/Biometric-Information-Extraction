@@ -303,6 +303,7 @@ cat /data7/sunxiuqiang/Biometric_Information_Extraction/unmatched_names_test.txt
 开启阶段二后，会额外输出：
 - Excel 新工作表：`llm_backfill`
 - CSV 日志：`*_llm_backfill.csv`（或你通过 `--llm-backfill-log-file` 指定的路径）
+- `--progress-file`（如 `progress_don.csv`）只记录第一阶段并发抽取进度，不包含阶段二回填进度
 
 日志会记录：
 - `category`（country_province/pathogen/host）
@@ -324,7 +325,7 @@ python -m app.batch_extract_csv_qwen_parallel ^
   --dict-host-xlsx "C:\Users\imcas\Desktop\Biometric Information Extraction\dict_host_tag.xlsx" ^
   --unmatched-file "C:\Users\imcas\Desktop\Biometric Information Extraction\unmatched_names_who.txt" ^
   --enable-llm-backfill ^
-  --llm-backfill-timeout 180 ^
+  --llm-backfill-timeout 120 ^
   --llm-backfill-retries 1 ^
   --llm-backfill-log-file "C:\Users\imcas\Desktop\Biometric Information Extraction\who_llm_backfill_log.csv"
 ```
@@ -339,4 +340,15 @@ python -m app.batch_extract_csv_qwen_parallel ^
 提交命令不变：
 ```bash
 qsub run_bio_task.pbs
+```
+
+### 11.7 阶段二实时进度查看
+阶段二（unmatched 回填）会在 `task_run.log` 中输出实时进度：
+- 开始时打印唯一查询总数：`Stage-2 backfill unique unmatched queries: ...`
+- 每处理 50 个唯一查询打印一次：`stage-2 backfill progress: 50/..., elapsed=..., eta=...`
+
+查看命令：
+```bash
+tail -f /data7/sunxiuqiang/Biometric_Information_Extraction/task_run.log
+grep -nE "Stage-2 backfill|stage-2 backfill progress|Done.|Output excel" /data7/sunxiuqiang/Biometric_Information_Extraction/task_run.log
 ```

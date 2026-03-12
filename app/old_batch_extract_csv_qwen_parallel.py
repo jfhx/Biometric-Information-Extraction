@@ -13,10 +13,7 @@ import requests
 
 from app.core.config import settings
 from app.services.llm_client import LLMRequestError, parse_llm_json
-from app.services.prompt_templates import (
-    CSV_FIELD_SYSTEM_PROMPT,
-    CSV_FIELD_USER_PROMPT,
-)
+from app.services.prompt_templates import CSV_FIELD_SYSTEM_PROMPT, CSV_FIELD_USER_PROMPT
 from app.utils.standardize import (
     CountryProvinceStandardizer,
     HostStandardizer,
@@ -61,8 +58,6 @@ BACKFILL_SYSTEM_PROMPT = (
     "You normalize noisy epidemiology entities into canonical values. "
     "Always return strict JSON only."
 )
-
-BACKFILL_PROGRESS_EVERY = 50
 
 OUTPUT_FIELDS = [
     "source_url",
@@ -314,82 +309,6 @@ def _run_llm_backfill_on_unmatched(
     pathogen_cache: Dict[str, Dict[str, Any]] = {}
     host_cache: Dict[str, Dict[str, Any]] = {}
 
-    geo_targets: Set[str] = set()
-    pathogen_targets: Set[str] = set()
-    host_targets: Set[str] = set()
-
-    for rec in records:
-        if standardizer:
-            for prefix in ("original", "spread"):
-                country_field = f"{prefix}_country"
-                province_field = f"{prefix}_province"
-                raw_country = _safe_str(rec.get(country_field, ""))
-                raw_province = _safe_str(rec.get(province_field, ""))
-                pair_key = f"{raw_country}|{raw_province}"
-
-                needs_geo = False
-                if raw_country and raw_country in unmatched_countries:
-                    needs_geo = True
-                if pair_key in unmatched_provinces:
-                    needs_geo = True
-                if needs_geo:
-                    geo_targets.add(pair_key)
-
-        raw_pathogen = _safe_str(rec.get("pathogen", ""))
-        if (
-            pathogen_std
-            and raw_pathogen
-            and raw_pathogen in unmatched_pathogens
-        ):
-            pathogen_targets.add(raw_pathogen)
-
-        raw_host = _safe_str(rec.get("host", ""))
-        if host_std and raw_host and raw_host in unmatched_hosts:
-            host_targets.add(raw_host)
-
-    total_backfill_queries = (
-        len(geo_targets)
-        + len(pathogen_targets)
-        + len(host_targets)
-    )
-    completed_backfill_queries = 0
-    backfill_start = time.perf_counter()
-
-    def _log_backfill_progress() -> None:
-        if total_backfill_queries <= 0:
-            return
-        should_print = (
-            completed_backfill_queries % BACKFILL_PROGRESS_EVERY == 0
-            or completed_backfill_queries == total_backfill_queries
-        )
-        if not should_print:
-            return
-
-        elapsed_seconds = time.perf_counter() - backfill_start
-        speed = (
-            completed_backfill_queries / elapsed_seconds
-            if elapsed_seconds > 0
-            else 0.0
-        )
-        eta_seconds = (
-            (total_backfill_queries - completed_backfill_queries) / speed
-            if speed > 0
-            else 0.0
-        )
-        now_text = time.strftime("%Y-%m-%d %H:%M:%S")
-        print(
-            f"[{now_text}] stage-2 backfill progress: "
-            f"{completed_backfill_queries}/{total_backfill_queries}, "
-            f"elapsed={elapsed_seconds:.1f}s, eta={eta_seconds:.1f}s"
-        )
-
-    if total_backfill_queries > 0:
-        print(
-            "Stage-2 backfill unique unmatched queries: "
-            f"{total_backfill_queries} "
-            "(country/province + pathogen + host)."
-        )
-
     for rec in records:
         if standardizer:
             for prefix in ("original", "spread"):
@@ -427,8 +346,6 @@ def _run_llm_backfill_on_unmatched(
                         "applied_count": 0,
                     }
                     geo_cache[pair_key] = cache_item
-                    completed_backfill_queries += 1
-                    _log_backfill_progress()
 
                 cache_item["usage_count"] += 1
                 changed = False
@@ -479,8 +396,6 @@ def _run_llm_backfill_on_unmatched(
                     "applied_count": 0,
                 }
                 pathogen_cache[raw_pathogen] = cache_item
-                completed_backfill_queries += 1
-                _log_backfill_progress()
 
             cache_item["usage_count"] += 1
             candidate = _safe_str(cache_item.get("canonical_pathogen", ""))
@@ -527,8 +442,6 @@ def _run_llm_backfill_on_unmatched(
                     "applied_count": 0,
                 }
                 host_cache[raw_host] = cache_item
-                completed_backfill_queries += 1
-                _log_backfill_progress()
 
             cache_item["usage_count"] += 1
             changed = False

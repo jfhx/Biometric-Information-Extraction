@@ -1,0 +1,44 @@
+============================================================
+Unmatched Country Names (not in dict_country_global_all)
+============================================================
+  Laos
+  St. Martin
+  UK, US
+
+============================================================
+Unmatched Province Names (country|province)
+============================================================
+  Australia|Central Australia
+  China|Wuhan
+  China|southern China
+  Dem. Rep. Congo|North Kivu
+  Ethiopia|South Omo Region
+  Pakistan|Sindh Province
+  South Africa|Nelson Mandela Bay
+  U.K.|northeastern United States
+
+============================================================
+Unmatched Pathogen Names (not in dict_pathogen_feature, name\tcount)
+============================================================
+  Lassa virus	3
+  2019-nCoV	2
+  avian influenza virus	2
+  avian flu	1
+  Ebola and Marburg	1
+  Ebola, Marburg	1
+  Epstein-Barr Virus	1
+  Epstein-Barr virus (EBV)	1
+  Highly pathogenic avian influenza viruses (HPAIVs)	1
+  Human T Cell Leukemia (HTVL-1)	1
+  Human T Cell Leukemia Virus-1	1
+  Langya henipavirus	1
+  measles virus	1
+  Measles virus	1
+  Mycoplasma fermentans	1
+
+============================================================
+Unmatched Host Names (not in dict_host_tag)
+============================================================
+  children
+  children and adolescents
+
